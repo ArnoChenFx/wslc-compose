@@ -34,15 +34,39 @@ def _is_self(path: str) -> bool:
         return False
 
 
+# Set by the `wslc` wrapper shim in its own process (and inherited by
+# children). When present, shutil.which() results are untrusted: on Windows
+# a shim for our own wrapper on PATH would otherwise re-invoke itself
+# without bound (each copy believing it is not "self"), spawning thousands
+# of processes. See shim.py.
+SHIM_GUARD_ENV = "WSLC_COMPOSE_SHIM_ACTIVE"
+
+
 @lru_cache(maxsize=1)
 def find_wslc() -> str:
     override = os.environ.get("WSLC_COMPOSE_BIN")
     if override:
         return override
-    for name in ("wslc.exe", "wslc"):
-        path = shutil.which(name)
-        if path and not _is_self(path):
-            return path
+    if os.name != "nt" and not os.environ.get(SHIM_GUARD_ENV):
+        # POSIX: respect a wslc on PATH (e.g. a distro package) first.
+        for name in ("wslc.exe", "wslc"):
+            path = shutil.which(name)
+            if path and not _is_self(path):
+                return path
+    else:
+        # Windows: prefer the real CLI at its default install locations.
+        # A `wslc` shim on PATH is very likely our own wrapper script (via
+        # pipx/uv/scoop shims), whose _is_self() guard can miss, so PATH is
+        # only consulted after the known-good locations and never while the
+        # shim guard is active.
+        for path in WSLC_FALLBACKS:
+            if os.path.isfile(path):
+                return path
+        if not os.environ.get(SHIM_GUARD_ENV):
+            for name in ("wslc.exe", "wslc"):
+                path = shutil.which(name)
+                if path and not _is_self(path):
+                    return path
     for path in WSLC_FALLBACKS:
         if os.path.isfile(path):
             return path

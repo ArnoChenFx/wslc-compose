@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import List, Optional, Tuple
@@ -22,6 +23,14 @@ def split_argv(argv: List[str]) -> Tuple[Optional[List[str]], List[str]]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    # Circuit breaker: mark this process so engine.find_wslc() never consults
+    # shutil.which(). If a shim for this very wrapper is on PATH (pipx/uv/
+    # scoop shims), which() would find it and re-invoke it without bound —
+    # the _is_self() guard compares against sys.argv[0], which does not match
+    # the shim launcher's path. The marker is inherited by child processes,
+    # so every nesting level is guarded. Children also receive it via the
+    # environment, keeping engine calls in this process on the fallback path.
+    os.environ[engine.SHIM_GUARD_ENV] = "1"
     compose_args, passthrough = split_argv(argv)
     if compose_args is not None:
         return cli.main(compose_args or ["--help"])
