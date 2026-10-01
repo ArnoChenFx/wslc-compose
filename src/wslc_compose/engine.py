@@ -99,7 +99,15 @@ def run(
     if dry_run:
         print("+ " + " ".join(argv))
         return subprocess.CompletedProcess(argv, 0, "", "")
-    proc = subprocess.run(argv, capture_output=capture, text=capture)
+    # wslc emits UTF-8 (incl. localized timestamps); on zh-CN Windows the
+    # default pipe encoding is GBK and a UnicodeDecodeError in the reader
+    # thread silently yields stdout=None. Decode as UTF-8 explicitly.
+    proc = subprocess.run(
+        argv,
+        capture_output=capture,
+        encoding="utf-8",
+        errors="replace",
+    )
     if check and proc.returncode != 0:
         detail = (proc.stderr or "").strip() if capture else ""
         raise WslcError(
@@ -154,8 +162,18 @@ def capture_json(args: List[str]):
         return []
     try:
         return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise WslcError(f"unexpected non-JSON output from wslc {' '.join(args)}: {exc}")
+    except json.JSONDecodeError:
+        # wslc 3.x emits NDJSON (one JSON object per line) for list/images;
+        # parse line-by-line and fail only if nothing parses.
+        items = []
+        try:
+            for line in text.splitlines():
+                line = line.strip()
+                if line:
+                    items.append(json.loads(line))
+            return items
+        except json.JSONDecodeError as exc:
+            raise WslcError(f"unexpected non-JSON output from wslc {' '.join(args)}: {exc}")
 
 
 # --- queries ---------------------------------------------------------------
@@ -166,7 +184,20 @@ def list_project_containers(project: str, all_states: bool = True) -> List[dict]
     if all_states:
         args.insert(1, "-a")
     result = capture_json(args)
-    return result if isinstance(result, list) else []
+    if isinstance(result, dict):
+        # single-container NDJSON parses as one dict; normalize to a list
+        result = [result]
+    if not isinstance(result, list):
+        return []
+    # wslc 3.x `list --format json` uses "ID"/"Names"; older preview used
+    # "Id"/"Name". Normalize so downstream code can rely on either.
+    for entry in result:
+        if isinstance(entry, dict):
+            if entry.get("Id") is None:
+                entry["Id"] = entry.get("ID")
+            if entry.get("Name") is None:
+                entry["Name"] = entry.get("Names")
+    return result
 
 
 def inspect(object_id: str) -> Optional[dict]:
