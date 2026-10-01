@@ -108,9 +108,16 @@ def _project_containers(project: Project) -> List[dict]:
     return enriched
 
 
-def _format_ports(ports: List[dict]) -> str:
+def _format_ports(ports) -> str:
+    # wslc 3.x list --format json reports Ports as a display string
+    # ("127.0.0.1:8080->80/tcp"); older previews reported a list of dicts.
+    if isinstance(ports, str):
+        return ports
     parts = []
     for port in ports:
+        if isinstance(port, str):
+            parts.append(port)
+            continue
         proto = PROTOCOLS.get(port.get("Protocol"), str(port.get("Protocol", "")))
         addr = port.get("BindingAddress") or "0.0.0.0"
         parts.append(f"{addr}:{port.get('HostPort')}->{port.get('ContainerPort')}/{proto}")
